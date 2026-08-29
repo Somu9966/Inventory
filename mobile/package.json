@@ -6,7 +6,9 @@
     "@react-navigation/native": "^7.3.18",
     "@react-navigation/native-stack": "^7.18.10",
     "axios": "^1.20.0",
-    "expo": "~57.0.17",
+    "expo": "~57.0.18",
+    "expo-constants": "~57.0.16",
+    "expo-image-picker": "~57.0.14",
     "expo-secure-store": "~57.0.2",
     "expo-status-bar": "~57.0.1",
     "react": "19.2.3",
@@ -19,7 +21,7 @@
     "typescript": "~6.0.3"
   },
   "scripts": {
-    "start": "expo start",
+    "start": "bash scripts/start.sh",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web"

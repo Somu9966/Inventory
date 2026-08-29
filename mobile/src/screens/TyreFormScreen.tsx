@@ -1,6 +1,8 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
+  Image,
   ScrollView,
   StyleSheet,
   Text,
@@ -8,9 +10,10 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/RootNavigator";
-import { api } from "../api/client";
+import { api, resolveImageUrl, uploadImage } from "../api/client";
 import { VehicleType } from "../types/tyre";
 
 type Props = NativeStackScreenProps<AppStackParamList, "TyreForm">;
@@ -28,6 +31,7 @@ interface FormState {
   sellingPrice: string;
   supplier: string;
   minStockThreshold: string;
+  imageUrl: string | null;
 }
 
 const EMPTY_FORM: FormState = {
@@ -41,6 +45,7 @@ const EMPTY_FORM: FormState = {
   sellingPrice: "",
   supplier: "",
   minStockThreshold: "5",
+  imageUrl: null,
 };
 
 export default function TyreFormScreen({ route, navigation }: Props) {
@@ -49,6 +54,7 @@ export default function TyreFormScreen({ route, navigation }: Props) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [loading, setLoading] = useState(isEditing);
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     if (!tyreId) return;
@@ -65,6 +71,7 @@ export default function TyreFormScreen({ route, navigation }: Props) {
         sellingPrice: String(data.sellingPrice),
         supplier: data.supplier ?? "",
         minStockThreshold: String(data.minStockThreshold),
+        imageUrl: data.imageUrl ?? null,
       });
       setLoading(false);
     })();
@@ -72,6 +79,51 @@ export default function TyreFormScreen({ route, navigation }: Props) {
 
   const update = (key: keyof FormState, value: string) =>
     setForm((prev) => ({ ...prev, [key]: value }));
+
+  // Upload as soon as a photo is picked, so the tyre only ever stores a path
+  // the server has already accepted.
+  const pickImage = async (source: "camera" | "library") => {
+    const permission =
+      source === "camera"
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+
+    if (!permission.granted) {
+      Alert.alert(
+        source === "camera" ? "Camera access needed" : "Photo access needed",
+        "Enable it for Tyre Inventory in your device settings to attach a picture."
+      );
+      return;
+    }
+
+    const options: ImagePicker.ImagePickerOptions = {
+      mediaTypes: ["images"],
+      allowsEditing: true,
+      aspect: [4, 3],
+      quality: 0.7,
+    };
+
+    const result =
+      source === "camera"
+        ? await ImagePicker.launchCameraAsync(options)
+        : await ImagePicker.launchImageLibraryAsync(options);
+
+    if (result.canceled) return;
+    const asset = result.assets[0];
+
+    setUploading(true);
+    try {
+      const url = await uploadImage(asset.uri, asset.mimeType);
+      setForm((prev) => ({ ...prev, imageUrl: url }));
+    } catch (err: any) {
+      Alert.alert(
+        "Upload failed",
+        err?.response?.data?.error ?? "Check your connection and try again."
+      );
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const buildPayload = () => ({
     sku: form.sku.trim(),
@@ -84,6 +136,7 @@ export default function TyreFormScreen({ route, navigation }: Props) {
     sellingPrice: Number(form.sellingPrice) || 0,
     supplier: form.supplier.trim() || undefined,
     minStockThreshold: Number(form.minStockThreshold) || 0,
+    imageUrl: form.imageUrl,
   });
 
   const handleSave = async () => {
@@ -120,6 +173,55 @@ export default function TyreFormScreen({ route, navigation }: Props) {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Text style={styles.label}>Photo</Text>
+      {form.imageUrl ? (
+        <View style={styles.imageWrapper}>
+          <Image source={{ uri: resolveImageUrl(form.imageUrl) }} style={styles.image} />
+          {uploading && (
+            <View style={styles.imageOverlay}>
+              <ActivityIndicator color="#fff" />
+            </View>
+          )}
+        </View>
+      ) : (
+        <TouchableOpacity
+          style={styles.imagePlaceholder}
+          onPress={() => pickImage("library")}
+          disabled={uploading}
+        >
+          {uploading ? (
+            <ActivityIndicator />
+          ) : (
+            <Text style={styles.imagePlaceholderText}>No photo yet</Text>
+          )}
+        </TouchableOpacity>
+      )}
+
+      <View style={styles.imageActions}>
+        <TouchableOpacity
+          style={styles.imageButton}
+          onPress={() => pickImage("camera")}
+          disabled={uploading}
+        >
+          <Text style={styles.imageButtonText}>Take photo</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.imageButton}
+          onPress={() => pickImage("library")}
+          disabled={uploading}
+        >
+          <Text style={styles.imageButtonText}>Choose photo</Text>
+        </TouchableOpacity>
+        {form.imageUrl && !uploading && (
+          <TouchableOpacity
+            style={styles.imageButton}
+            onPress={() => setForm((prev) => ({ ...prev, imageUrl: null }))}
+          >
+            <Text style={[styles.imageButtonText, styles.imageRemoveText]}>Remove</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
       <Field label="SKU" value={form.sku} onChangeText={(v) => update("sku", v)} />
       <Field label="Brand" value={form.brand} onChangeText={(v) => update("brand", v)} />
       <Field label="Model" value={form.model} onChangeText={(v) => update("model", v)} />
@@ -180,9 +282,9 @@ export default function TyreFormScreen({ route, navigation }: Props) {
       />
 
       <TouchableOpacity
-        style={[styles.button, saving && styles.buttonDisabled]}
+        style={[styles.button, (saving || uploading) && styles.buttonDisabled]}
         onPress={handleSave}
-        disabled={saving}
+        disabled={saving || uploading}
       >
         <Text style={styles.buttonText}>{isEditing ? "Save changes" : "Add tyre"}</Text>
       </TouchableOpacity>
@@ -227,6 +329,48 @@ const styles = StyleSheet.create({
     padding: 10,
     fontSize: 16,
   },
+  imageWrapper: { position: "relative", marginBottom: 8 },
+  image: {
+    width: "100%",
+    height: 180,
+    borderRadius: 8,
+    backgroundColor: "#f2f2f2",
+    resizeMode: "cover",
+  },
+  imageOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    borderRadius: 8,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  imagePlaceholder: {
+    height: 180,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ddd",
+    borderStyle: "dashed",
+    backgroundColor: "#fafafa",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
+  },
+  imagePlaceholderText: { color: "#999" },
+  imageActions: { flexDirection: "row", gap: 8, marginBottom: 18 },
+  imageButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    alignItems: "center",
+  },
+  imageButtonText: { color: "#333", fontWeight: "600", fontSize: 13 },
+  imageRemoveText: { color: "#c0392b" },
   segmented: { flexDirection: "row", marginBottom: 14, gap: 8 },
   segment: {
     flex: 1,

@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Prisma, VehicleType } from "@prisma/client";
 import { z } from "zod";
 import { prisma } from "../lib/prisma";
+import { remove as removeImage } from "../lib/storage";
 
 const vehicleTypeEnum = z.nativeEnum(VehicleType);
 
@@ -15,10 +16,21 @@ const tyreInputSchema = z.object({
   costPrice: z.number().nonnegative(),
   sellingPrice: z.number().nonnegative(),
   supplier: z.string().optional(),
+  // Only paths this API issued from POST /uploads are accepted, so a client
+  // cannot point a record at an arbitrary remote URL. null clears the image.
+  imageUrl: z
+    .string()
+    .regex(/^\/uploads\/[A-Za-z0-9-]+\.(jpg|png|webp)$/, "Invalid image reference")
+    .nullable()
+    .optional(),
   minStockThreshold: z.number().int().min(0).optional(),
 });
 
 const tyreUpdateSchema = tyreInputSchema.partial();
+
+const quantityAdjustSchema = z.object({
+  delta: z.number().int().refine((n) => n !== 0, { message: "delta must not be zero" }),
+});
 
 export async function listTyres(req: Request, res: Response) {
   const search = typeof req.query.search === "string" ? req.query.search : undefined;
@@ -85,10 +97,21 @@ export async function updateTyre(req: Request, res: Response) {
   }
 
   try {
+    const previous = await prisma.tyre.findUnique({
+      where: { id: req.params.id },
+      select: { imageUrl: true },
+    });
+
     const tyre = await prisma.tyre.update({
       where: { id: req.params.id },
       data: parsed.data,
     });
+
+    // Only once the write succeeded, and only if the image actually changed.
+    if (previous?.imageUrl && previous.imageUrl !== tyre.imageUrl) {
+      await removeImage(previous.imageUrl);
+    }
+
     res.json(tyre);
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
@@ -103,7 +126,8 @@ export async function updateTyre(req: Request, res: Response) {
 
 export async function deleteTyre(req: Request, res: Response) {
   try {
-    await prisma.tyre.delete({ where: { id: req.params.id } });
+    const tyre = await prisma.tyre.delete({ where: { id: req.params.id } });
+    await removeImage(tyre.imageUrl);
     res.status(204).send();
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2025") {
@@ -111,4 +135,40 @@ export async function deleteTyre(req: Request, res: Response) {
     }
     throw err;
   }
+}
+
+export async function adjustTyreQuantity(req: Request, res: Response) {
+  const parsed = quantityAdjustSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ error: parsed.error.flatten() });
+  }
+
+  const { delta } = parsed.data;
+  const { id } = req.params;
+
+  // The increment is applied by the database, and for a decrement the `gte`
+  // guard is part of the same statement — so two people adjusting the same
+  // tyre cannot clobber each other's change or push stock below zero.
+  const { count } = await prisma.tyre.updateMany({
+    where: { id, ...(delta < 0 ? { quantity: { gte: -delta } } : {}) },
+    data: { quantity: { increment: delta } },
+  });
+
+  if (count === 0) {
+    // Either the tyre is gone, or the guard rejected an oversell.
+    const current = await prisma.tyre.findUnique({
+      where: { id },
+      select: { quantity: true },
+    });
+    if (!current) {
+      return res.status(404).json({ error: "Tyre not found" });
+    }
+    return res.status(409).json({
+      error: `Only ${current.quantity} left in stock`,
+      quantity: current.quantity,
+    });
+  }
+
+  const tyre = await prisma.tyre.findUnique({ where: { id } });
+  return res.json(tyre);
 }

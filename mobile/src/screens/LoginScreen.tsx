@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -7,7 +7,6 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 

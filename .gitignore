@@ -11,3 +11,6 @@ mobile/web-build/
 
 # macOS
 .DS_Store
+
+# Uploaded images
+backend/uploads/
