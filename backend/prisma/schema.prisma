@@ -36,6 +36,7 @@ model Tyre {
   costPrice         Decimal     @db.Decimal(10, 2)
   sellingPrice      Decimal     @db.Decimal(10, 2)
   supplier          String?
+  imageUrl          String?
   minStockThreshold Int         @default(5)
   createdAt         DateTime    @default(now())
   updatedAt         DateTime    @updatedAt
