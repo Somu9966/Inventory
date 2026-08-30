@@ -1,23 +1,14 @@
 # Tyre Inventory
 
-A mobile app (iOS + Android) for managing tyre shop inventory. Admin logs in
-and has full create/edit/update/delete access over the tyre catalog.
+A mobile app (iOS + Android) for managing tyre shop inventory. Fully offline:
+all data — tyre records and photos — lives on the device itself, in a local
+SQLite database and the app's own file storage. There is no server and no
+network dependency of any kind.
 
-- `backend/` — Node.js + Express + TypeScript API, PostgreSQL via Prisma
-- `mobile/` — React Native (Expo) app
-
-## Backend setup
-
-```bash
-cd backend
-npm install
-cp .env.example .env   # then fill in DATABASE_URL, JWT_SECRET, ADMIN_EMAIL, ADMIN_PASSWORD
-
-npx prisma migrate dev   # creates the database schema
-npm run seed              # creates the initial admin user from .env
-
-npm run dev                # starts the API on http://localhost:4000
-```
+- `mobile/` — React Native (Expo) app; this is the whole product now
+- `backend/` — a Node/Express/PostgreSQL API from an earlier version of this
+  project. **Not used by the app anymore** — kept in the repo but inert. See
+  [Why there's an unused `backend/` folder](#why-theres-an-unused-backend-folder).
 
 ## Mobile setup
 
@@ -28,75 +19,61 @@ npm install
 npm start
 ```
 
-The app derives its API base URL from the host it was served from, so it
-follows the Expo dev server automatically. Override it only when pointing at a
-different backend, via `EXPO_PUBLIC_API_URL` or `expo.extra.API_BASE_URL`.
-
-**Running under WSL2?** Use `npm start` — it detects WSL automatically. See
-[mobile/scripts/README_WSL_TESTING.md](mobile/scripts/README_WSL_TESTING.md) —
-plain `expo start` advertises `127.0.0.1` there, which shows up as a "Network
-error" on the phone.
+**Running under WSL2?** Use `npm start` — it detects WSL automatically and
+forwards the port Expo Go needs to load the app. See
+[mobile/scripts/README_WSL_TESTING.md](mobile/scripts/README_WSL_TESTING.md).
+(That guide predates this app going fully offline — ignore anything in it
+about forwarding port 4000 or a backend; only the Expo/Metro port matters now.)
 
 Then press `i` for iOS simulator, `a` for Android emulator, or scan the QR
 code with Expo Go on a physical device.
 
+On first launch, the app asks you to set an admin password — there's no
+default login. That password (hashed, never stored in plain text) is what
+gates the app on this device from then on.
+
+## Data & storage
+
+- **Tyre records** live in a SQLite database local to the app
+  (`src/db/database.ts`, `src/db/tyreRepository.ts`), created automatically
+  on first launch. There's nothing to install or configure.
+- **Photos** are copied into the app's own private storage on first pick
+  (`src/storage/images.ts`) and referenced by a local file path — no upload
+  step, works with the camera disabled/offline.
+- **Login** is a password set once on-device (`src/auth/localAuth.ts`),
+  hashed and stored via `expo-secure-store`. There's no account system and
+  no password recovery — if you forget it, the fix is uninstalling and
+  reinstalling the app (which clears its data, including the tyre catalog).
+- **Nothing syncs between devices.** Each install of the app has its own,
+  independent tyre catalog. If you need multiple people/devices sharing one
+  catalog, that's a different architecture (a real backend) — see the note
+  below.
+
 ## Tyre photos
 
-Each tyre can carry one photo, taken with the camera or picked from the library.
-Thumbnails show in the list; the full image shows in the add/edit form.
-
-Uploading is a separate step from saving the tyre:
-
-```
-POST  /uploads              multipart, field name "image"  ->  { "url": "/uploads/<uuid>.jpg" }
-PUT   /tyres/:id            { "imageUrl": "/uploads/<uuid>.jpg" }
-```
-
-- Files land in `backend/uploads/` (override with `UPLOAD_DIR`). Everything that
-  knows where images live is in `backend/src/lib/storage.ts`, so moving to S3 or
-  Cloudinary means reimplementing that one module.
-- JPEG/PNG/WebP only, 5MB max. Filenames are random UUIDs, so a client-supplied
-  name never touches the filesystem and a URL isn't guessable from a SKU.
-- The database stores a **relative** path, not an absolute URL, so records stay
-  valid when the dev machine's IP changes. The app resolves it against its
-  current API host.
-- `imageUrl` on a tyre is validated against the `/uploads/<uuid>.<ext>` shape, so
-  a record cannot be pointed at an arbitrary remote URL.
-- Replacing or deleting a tyre's image deletes the old file.
-
-Images are served unauthenticated so `<Image>` can load them without carrying a
-token. If the catalogue ever needs to be private, that's the thing to change.
-
-### Known gap: orphaned uploads
-
-A photo uploads as soon as it's picked, so abandoning the form before saving
-leaves an unreferenced file in `backend/uploads/`. Harmless, but it accumulates.
-A periodic sweep comparing the directory against `Tyre.imageUrl` would clear it.
+Each tyre can carry one photo, taken with the camera or picked from the
+library. Thumbnails show in the list; the full image shows in the add/edit
+form. Picking a photo copies it into the app's storage immediately; the old
+photo is only deleted once the form is actually saved, so backing out of an
+edit never loses the original photo.
 
 ## Stock adjustments
 
 Quantity is the field that changes most, so the list screen has inline `−`/`+`
-steppers — no need to open the edit form. They post to a dedicated endpoint:
+steppers — no need to open the edit form. Each tap runs a single guarded SQL
+update (`tyreRepository.adjustQuantity`) that increments the quantity and, on
+a decrement, refuses to push it below zero in the same statement — so there's
+no window where a read-then-write race could oversell. An oversell attempt
+shows an alert with the true current quantity.
 
-```
-PATCH /tyres/:id/quantity   { "delta": -1 }
-```
+## Why there's an unused `backend/` folder
 
-The delta is applied by the database (`increment`, with a `gte` guard on
-decrements), not read-modify-write, so simultaneous adjustments from two phones
-cannot clobber each other or push stock below zero. An oversell returns `409`
-with the true current quantity, which the app uses to correct itself.
-
-Taps are coalesced client-side for ~600ms, so tapping `+` ten times sends one
-request for `+10` rather than ten requests.
-
-## Roles
-
-Only an `ADMIN` role exists today. There is no public sign-up endpoint — the
-seed script is the only way to create an account, which keeps account
-creation off the API's attack surface. The backend's `requireAdmin`
-middleware is structured so additional, lower-privilege roles can be added
-later without changing the auth flow.
+This project originally ran on a Node/Express API with a PostgreSQL database
+(deployed on Railway). It was replaced with fully on-device storage so the
+app works without any network connection or hosting costs. The backend code
+is left in the repo in case a future "sync across devices" feature is wanted
+— that would mean reviving it as a sync target, not rebuilding it from
+scratch — but nothing in `mobile/` calls it today.
 
 ## Troubleshooting
 

@@ -13,8 +13,15 @@ import {
 import * as ImagePicker from "expo-image-picker";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { AppStackParamList } from "../navigation/RootNavigator";
-import { api, resolveImageUrl, uploadImage } from "../api/client";
-import { VehicleType } from "../types/tyre";
+import {
+  createTyre,
+  deleteTyre,
+  DuplicateSkuError,
+  getTyre,
+  updateTyre,
+} from "../db/tyreRepository";
+import { saveImageFromPicker } from "../storage/images";
+import { TyreInput, VehicleType } from "../types/tyre";
 
 type Props = NativeStackScreenProps<AppStackParamList, "TyreForm">;
 
@@ -31,7 +38,7 @@ interface FormState {
   sellingPrice: string;
   supplier: string;
   minStockThreshold: string;
-  imageUrl: string | null;
+  imageUri: string | null;
 }
 
 const EMPTY_FORM: FormState = {
@@ -45,8 +52,11 @@ const EMPTY_FORM: FormState = {
   sellingPrice: "",
   supplier: "",
   minStockThreshold: "5",
-  imageUrl: null,
+  imageUri: null,
 };
+
+const centsToRupeeString = (cents: number) => (cents / 100).toFixed(2);
+const rupeeStringToCents = (value: string) => Math.round((Number(value) || 0) * 100);
 
 export default function TyreFormScreen({ route, navigation }: Props) {
   const tyreId = route.params?.tyreId;
@@ -59,19 +69,20 @@ export default function TyreFormScreen({ route, navigation }: Props) {
   useEffect(() => {
     if (!tyreId) return;
     (async () => {
-      const { data } = await api.get(`/tyres/${tyreId}`);
+      const tyre = await getTyre(tyreId);
+      if (!tyre) return;
       setForm({
-        sku: data.sku,
-        brand: data.brand,
-        model: data.model,
-        size: data.size,
-        vehicleType: data.vehicleType,
-        quantity: String(data.quantity),
-        costPrice: String(data.costPrice),
-        sellingPrice: String(data.sellingPrice),
-        supplier: data.supplier ?? "",
-        minStockThreshold: String(data.minStockThreshold),
-        imageUrl: data.imageUrl ?? null,
+        sku: tyre.sku,
+        brand: tyre.brand,
+        model: tyre.model,
+        size: tyre.size,
+        vehicleType: tyre.vehicleType,
+        quantity: String(tyre.quantity),
+        costPrice: centsToRupeeString(tyre.costPriceCents),
+        sellingPrice: centsToRupeeString(tyre.sellingPriceCents),
+        supplier: tyre.supplier ?? "",
+        minStockThreshold: String(tyre.minStockThreshold),
+        imageUri: tyre.imageUri,
       });
       setLoading(false);
     })();
@@ -80,8 +91,9 @@ export default function TyreFormScreen({ route, navigation }: Props) {
   const update = (key: keyof FormState, value: string) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
-  // Upload as soon as a photo is picked, so the tyre only ever stores a path
-  // the server has already accepted.
+  // The old file (if any) is left in place until save, so canceling the form
+  // never deletes a photo; tyreRepository.updateTyre cleans up the previous
+  // file only after a successful write.
   const pickImage = async (source: "camera" | "library") => {
     const permission =
       source === "camera"
@@ -113,43 +125,42 @@ export default function TyreFormScreen({ route, navigation }: Props) {
 
     setUploading(true);
     try {
-      const url = await uploadImage(asset.uri, asset.mimeType);
-      setForm((prev) => ({ ...prev, imageUrl: url }));
-    } catch (err: any) {
-      Alert.alert(
-        "Upload failed",
-        err?.response?.data?.error ?? "Check your connection and try again."
-      );
+      const uri = await saveImageFromPicker(asset.uri, asset.mimeType);
+      setForm((prev) => ({ ...prev, imageUri: uri }));
+    } catch {
+      Alert.alert("Could not save photo", "Please try again.");
     } finally {
       setUploading(false);
     }
   };
 
-  const buildPayload = () => ({
+  const buildPayload = (): TyreInput => ({
     sku: form.sku.trim(),
     brand: form.brand.trim(),
     model: form.model.trim(),
     size: form.size.trim(),
     vehicleType: form.vehicleType,
     quantity: Number(form.quantity) || 0,
-    costPrice: Number(form.costPrice) || 0,
-    sellingPrice: Number(form.sellingPrice) || 0,
-    supplier: form.supplier.trim() || undefined,
+    costPriceCents: rupeeStringToCents(form.costPrice),
+    sellingPriceCents: rupeeStringToCents(form.sellingPrice),
+    supplier: form.supplier.trim() || null,
     minStockThreshold: Number(form.minStockThreshold) || 0,
-    imageUrl: form.imageUrl,
+    imageUri: form.imageUri,
   });
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      if (isEditing) {
-        await api.put(`/tyres/${tyreId}`, buildPayload());
+      if (isEditing && tyreId) {
+        await updateTyre(tyreId, buildPayload());
       } else {
-        await api.post("/tyres", buildPayload());
+        await createTyre(buildPayload());
       }
       navigation.goBack();
-    } catch (err: any) {
-      Alert.alert("Save failed", err?.response?.data?.error ?? "Please check the form and try again.");
+    } catch (err) {
+      const message =
+        err instanceof DuplicateSkuError ? err.message : "Please check the form and try again.";
+      Alert.alert("Save failed", message);
     } finally {
       setSaving(false);
     }
@@ -162,7 +173,8 @@ export default function TyreFormScreen({ route, navigation }: Props) {
         text: "Delete",
         style: "destructive",
         onPress: async () => {
-          await api.delete(`/tyres/${tyreId}`);
+          if (!tyreId) return;
+          await deleteTyre(tyreId);
           navigation.goBack();
         },
       },
@@ -174,9 +186,9 @@ export default function TyreFormScreen({ route, navigation }: Props) {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.label}>Photo</Text>
-      {form.imageUrl ? (
+      {form.imageUri ? (
         <View style={styles.imageWrapper}>
-          <Image source={{ uri: resolveImageUrl(form.imageUrl) }} style={styles.image} />
+          <Image source={{ uri: form.imageUri }} style={styles.image} />
           {uploading && (
             <View style={styles.imageOverlay}>
               <ActivityIndicator color="#fff" />
@@ -212,10 +224,10 @@ export default function TyreFormScreen({ route, navigation }: Props) {
         >
           <Text style={styles.imageButtonText}>Choose photo</Text>
         </TouchableOpacity>
-        {form.imageUrl && !uploading && (
+        {form.imageUri && !uploading && (
           <TouchableOpacity
             style={styles.imageButton}
-            onPress={() => setForm((prev) => ({ ...prev, imageUrl: null }))}
+            onPress={() => setForm((prev) => ({ ...prev, imageUri: null }))}
           >
             <Text style={[styles.imageButtonText, styles.imageRemoveText]}>Remove</Text>
           </TouchableOpacity>
