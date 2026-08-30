@@ -11,23 +11,37 @@ import {
 import { useAuth } from "../context/AuthContext";
 
 export default function LoginScreen() {
-  const { login } = useAuth();
-  const [email, setEmail] = useState("");
+  const { needsSetup, setup, login } = useAuth();
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
     setError(null);
+
+    if (needsSetup && password !== confirmPassword) {
+      setError("Passwords don't match");
+      return;
+    }
+
     setSubmitting(true);
     try {
-      await login(email.trim(), password);
+      if (needsSetup) {
+        await setup(password);
+      } else {
+        await login(password);
+      }
     } catch {
-      setError("Invalid email or password");
+      setError(needsSetup ? "Could not set up admin password" : "Incorrect password");
     } finally {
       setSubmitting(false);
     }
   };
+
+  const canSubmit = needsSetup
+    ? password.length > 0 && confirmPassword.length > 0
+    : password.length > 0;
 
   return (
     <KeyboardAvoidingView
@@ -35,16 +49,10 @@ export default function LoginScreen() {
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
       <Text style={styles.title}>Tyre Inventory</Text>
-      <Text style={styles.subtitle}>Admin login</Text>
+      <Text style={styles.subtitle}>
+        {needsSetup ? "Set up your admin password" : "Admin login"}
+      </Text>
 
-      <TextInput
-        style={styles.input}
-        placeholder="Email"
-        autoCapitalize="none"
-        keyboardType="email-address"
-        value={email}
-        onChangeText={setEmail}
-      />
       <TextInput
         style={styles.input}
         placeholder="Password"
@@ -53,17 +61,27 @@ export default function LoginScreen() {
         onChangeText={setPassword}
       />
 
+      {needsSetup && (
+        <TextInput
+          style={styles.input}
+          placeholder="Confirm password"
+          secureTextEntry
+          value={confirmPassword}
+          onChangeText={setConfirmPassword}
+        />
+      )}
+
       {error && <Text style={styles.error}>{error}</Text>}
 
       <TouchableOpacity
-        style={[styles.button, submitting && styles.buttonDisabled]}
+        style={[styles.button, (submitting || !canSubmit) && styles.buttonDisabled]}
         onPress={handleSubmit}
-        disabled={submitting || !email || !password}
+        disabled={submitting || !canSubmit}
       >
         {submitting ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.buttonText}>Log in</Text>
+          <Text style={styles.buttonText}>{needsSetup ? "Create password" : "Log in"}</Text>
         )}
       </TouchableOpacity>
     </KeyboardAvoidingView>

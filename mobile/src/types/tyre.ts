@@ -8,11 +8,13 @@ export interface Tyre {
   size: string;
   vehicleType: VehicleType;
   quantity: number;
-  costPrice: string;
-  sellingPrice: string;
+  costPriceCents: number;
+  sellingPriceCents: number;
   supplier: string | null;
-  imageUrl: string | null;
+  imageUri: string | null;
   minStockThreshold: number;
   createdAt: string;
   updatedAt: string;
 }
+
+export type TyreInput = Omit<Tyre, "id" | "createdAt" | "updatedAt">;

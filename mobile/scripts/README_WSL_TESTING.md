@@ -1,9 +1,16 @@
 WSL Testing Guide (run the app on a physical phone)
 ===================================================
 
-When the backend and Expo run inside WSL2, a phone on the same WiFi cannot
-reach them directly: WSL2's default NAT networking gives the distro a private
-IP (e.g. `172.26.x.x`) that only the Windows host can route to.
+> The app is fully offline now — it has no backend and makes no network
+> calls of its own. Everything below is about a completely separate concern:
+> getting the Expo/Metro JS bundle from your dev machine to your phone at
+> all, which is still needed for any Expo Go development regardless of what
+> the app does. Ignore any port-4000/backend forwarding — that port is dead
+> weight now.
+
+When Expo runs inside WSL2, a phone on the same WiFi cannot reach it
+directly: WSL2's default NAT networking gives the distro a private IP (e.g.
+`172.26.x.x`) that only the Windows host can route to.
 
 Two things have to be true for the phone to work.
 
@@ -57,18 +64,13 @@ curl -s localhost:8081 -H 'Accept: multipart/mixed' \
   | grep -o '"hostUri":"[^"]*"'
 ```
 
-The app derives its API base URL from that same host (see
-`mobile/src/api/client.ts`), so once Expo advertises the right address the
-backend calls follow automatically — there is no IP to hardcode.
-
 Verifying the path
 ------------------
 
-From Windows (PowerShell), both should return 200:
+From Windows (PowerShell), this should return 200:
 
 ```powershell
 Invoke-WebRequest http://<WINDOWS_LAN_IP>:8081/status -UseBasicParsing
-Invoke-WebRequest http://<WINDOWS_LAN_IP>:4000/health -UseBasicParsing
 ```
 
 If those pass but the phone still fails, the problem is between the phone and

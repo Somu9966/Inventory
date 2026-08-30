@@ -31,7 +31,8 @@
           "photosPermission": "Allow $(PRODUCT_NAME) to access your photos so you can attach a picture to a tyre.",
           "cameraPermission": "Allow $(PRODUCT_NAME) to use the camera so you can photograph a tyre."
         }
-      ]
+      ],
+      "expo-sqlite"
     ]
   }
 }
